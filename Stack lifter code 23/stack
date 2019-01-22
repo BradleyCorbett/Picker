@@ -1,0 +1,474 @@
+//Second version of the combined stacker code, this one has had its implementation structure simulated via serial
+//Input pin declarations
+const int metal_up = 23;
+const int metal_down = 25;
+const int metal_home = 27;
+const int metal_jet = 29;
+const int wood_up = 22;
+const int wood_down = 24;
+const int wood_home = 26;
+const int wood_jet = 28;
+const int Signal = 44;
+const int AirSignal = 46;
+//These are just name designations for the sensors that I used in the simulation
+//These are the most base-level references I have in this code, they are referred to as metal and wood sensors
+//further down in the code
+#define right_prox  53 //Refers to the one for the wooden sensor
+#define left_prox  41 //Refers to the one for the metal sensor
+#define metal_bottom 37
+//State declarations
+//They are used to denote whether the buttons have been pressed or not
+int metal_up_state = 0;
+int metal_down_state = 0;
+int metal_home_state = 0;
+int metal_jet_state = 0;
+//Output declarations
+int metal_auto = 1;
+const int motorON = 31;
+const int motorAP = 33;
+const int metaljet = 35;
+int metal_home_active = 0;
+int metal_home_drop = 0;
+int metal_home_rise = 0;
+int metal_prox = 0; //output for the metal proximity sensor
+int metal_reading = 0; //raw output for the metal sensor
+int metal_bottom_state =0;
+
+int wood_up_state = 0;
+int wood_down_state = 0;
+int wood_home_state = 0;
+int wood_jet_state = 0;
+//Output declarations
+int wood_auto = 1;
+#define StepPulse  43 //cw pulse
+#define DirectionSelect  45 //ccw
+#define PowerDown  47
+#define PulseOriginMonitor  49
+#define Alarm  51
+const int woodjet = 39; //KevinC Note: Not sure if you use 1 singular jet for both stackers and mechanically control the jet stream or if you
+//have 2 jets, please let me know if you have just 1 so that I can correct it (I probably should have asked at the start when I began coding this)
+int motorPosition = 0; //A counter for the position of the stepper motor
+int wood_home_active = 0;
+int wood_home_drop = 0;
+int wood_home_rise = 0;
+int wood_reading = 0; //raw output for the wooden sensor
+int wood_prox = 0; //output for the wooden proximity sensor
+int Home = 0;
+void setup() {
+  //Set serial to begin at 9600 baudrate
+  Serial.begin(9600);
+  //Button declarations
+  pinMode(metal_up, INPUT_PULLUP);
+  pinMode(metal_down, INPUT_PULLUP);
+  pinMode(metal_home, INPUT_PULLUP);
+  pinMode(metal_jet, INPUT_PULLUP);
+  pinMode(wood_up, INPUT_PULLUP);
+  pinMode(wood_down, INPUT_PULLUP);
+  pinMode(wood_home, INPUT_PULLUP);
+  pinMode(wood_jet, INPUT_PULLUP);
+  //Sensor declarations
+  pinMode(right_prox, INPUT_PULLUP); //WOOD SENSOR
+  pinMode(left_prox, INPUT_PULLUP); //METAL SENSOR
+  pinMode(metal_bottom, INPUT_PULLUP); //METAL SENSOR
+  pinMode(Signal, INPUT_PULLUP);
+  pinMode(AirSignal, INPUT_PULLUP);
+  //Output declarations
+  //Metal stacker setups
+  //The ON pin controls whether the motor turns on or off
+  //A-Phase ON means you are running backwards, A-Phase OFF means you are running forward: according to the timing chart
+  //It would seem that according to the timing chart, you don't need to have ON turned off prior to a switch in the A-PHASE pin
+  //BUT, I will still turn off the ON pin prior to a switch
+  pinMode(motorON, OUTPUT);
+  pinMode(motorAP, OUTPUT);
+  pinMode(metaljet, OUTPUT);
+  //Wooden stacker setups
+  pinMode(StepPulse, OUTPUT);
+  pinMode(DirectionSelect, OUTPUT);
+  pinMode(PowerDown, OUTPUT);
+  pinMode(PulseOriginMonitor, INPUT);
+  pinMode(Alarm, INPUT);
+  pinMode(woodjet, OUTPUT);
+  //Turn on the motor
+  //The driver is setup with inverted logic ie. arduino pin LOW counts as ON to the driver
+  digitalWrite(PowerDown, HIGH);
+}
+void loop() {
+  
+//delayMicroseconds(sensorValue);
+  //METAL STATE
+  //Update key variables for the metal stacker
+  readButtons();
+  readMetalSensor();
+  //Update the orders each time
+  int metalOrder = getMetalorder();
+  metalState(metalOrder);
+  //WOOD STATE
+  //Update key variables for the metal stacker
+  readButtons();
+  readWoodSensor();
+  //Update the orders each time
+  int woodOrder = getWoodorder();
+  woodState(woodOrder);
+  delay(10); //small delay within the main loop
+  //Button and Sensor Troubleshooting Code - Check if the buttons or the sensors are working or not
+  
+     if(digitalRead(metal_up) == LOW){
+     Serial.println("Metal Up");
+     } else if(digitalRead(metal_down) == LOW){
+     Serial.println("Metal Down");
+     } else if(digitalRead(metal_home) == LOW){
+     Serial.println("Metal Home");
+     } else if(digitalRead(metal_jet) == LOW){
+     Serial.println("Metal Jet");
+     } else if(digitalRead(wood_up) == LOW){
+     Serial.println("Wood Up");
+     } else if(digitalRead(wood_down) == LOW){
+     Serial.println("Wood Down");
+     } else if(digitalRead(wood_home) == LOW){
+     Serial.println("Wood Home");
+     } else if(digitalRead(wood_jet) == LOW){
+     Serial.println("Wood Jet");
+     }else if(digitalRead(Signal) == LOW){
+     Serial.println("Home");
+     }
+     
+     if(digitalRead(right_prox) == LOW){
+     //Serial.println("Right Triggered");
+     } else {
+     //Serial.println("Right Untriggered");
+     }
+     if(digitalRead(left_prox) == LOW){
+     //Serial.println("Left Triggered");
+     } else {
+     //Serial.println("Left Untriggered");
+     }
+     delay(1);
+  
+}
+//Check which buttons have been pressed and update the state variables
+void readButtons() {
+  metal_up_state = digitalRead(metal_up);
+  metal_down_state = digitalRead(metal_down);
+  metal_home_state = digitalRead(Signal);//metal_home);
+  metal_jet_state = digitalRead(metal_jet);
+  wood_up_state = digitalRead(wood_up);
+  wood_down_state = digitalRead(wood_down);
+  wood_home_state = digitalRead(wood_home);
+  wood_jet_state = digitalRead(wood_jet);
+  //Home = digitalRead(metal_home);
+  if(digitalRead(metal_home) == LOW) {
+        Home = 0;
+      } else {
+        Home = 1;
+      }
+    //return 6;
+}
+//Read the sensors
+void readSensors() {
+  readMetalSensor();
+  readWoodSensor();
+  
+}
+int getMetalorder() {
+ if (Home == LOW){
+    return 6;
+ }else if (metal_bottom_state == LOW) {
+    return 10;
+  //If we have no button inputs AND we are in auto mode AND the proximity sensor has been tripped
+  }else if (metal_up_state && metal_down_state && metal_home_state && metal_jet_state && metal_auto && !metal_prox && !metal_home_active) {
+    return 1;
+  
+    //If we have no button inputs AND we are in auto mode AND the proximity sensor has not been tripped
+  } else if (metal_up_state && metal_down_state && metal_home_state && metal_jet_state && metal_auto && metal_prox) {
+    return 2;
+    //If we have no button inputs AND we are no longer in auto mode
+  } else if (metal_up_state && metal_down_state && metal_home_state && metal_jet_state && !metal_auto && !metal_home_active) {
+    return 3;
+    //Rest of the conditions check for individual button presses, with the exception of the 2 home conditions
+  } else if (!metal_up_state && metal_down_state && metal_home_state && metal_jet_state && !metal_home_active) {
+    return 4;
+  } else if (metal_up_state && !metal_down_state && metal_home_state && metal_jet_state && !metal_home_active) {
+    return 5;
+  //} else if (metal_up_state && metal_down_state && !Home && metal_jet_state && !metal_home_active){
+   // Serial.print("wtf");
+    //return 6;
+    //Initiate the home state
+  } else if (metal_up_state && metal_down_state && !metal_home_state && metal_jet_state && !metal_home_active){
+    return 6;
+  } else if (metal_home_active && metal_home_drop && !metal_home_rise) { //if we are in the home enter state AND the proximity sensor has already been tripped
+    return 7;
+  } else if (metal_home_active && metal_home_rise && !metal_home_drop) { //if we either finished dropping or the proximity sensor was never tripped
+    return 8;
+  } else if (metal_up_state && metal_down_state && metal_home_state && !metal_jet_state && !metal_home_active) {
+    return 9;
+  
+  }
+}
+int getWoodorder() {
+  if (digitalRead(AirSignal) == LOW){
+    return 9;
+  //If we have no button inputs AND we are in auto mode AND the proximity sensor has been tripped
+  }else if (wood_up_state && wood_down_state && wood_home_state && wood_jet_state && wood_auto && !wood_prox && !wood_home_active) {
+    
+    return 1;
+    //If we have no button inputs AND we are in auto mode AND the proximity sensor has not been tripped
+  } else if (wood_up_state && wood_down_state && wood_home_state && wood_jet_state && wood_auto && wood_prox) {
+    return 2;
+    //If we have no button inputs AND we are no longer in auto mode
+  } else if (wood_up_state && wood_down_state && wood_home_state && wood_jet_state && !wood_auto && !wood_home_active) {
+    return 3;
+    //Rest of the conditions check for individual button presses, with the exception of the 2 home conditions
+  } else if (!wood_up_state && wood_down_state && wood_home_state && wood_jet_state && !wood_home_active) {
+    return 4;
+  } else if (wood_up_state && !wood_down_state && wood_home_state && wood_jet_state && !wood_home_active) {
+    return 5;
+    //Initiate the home state
+  } else if (wood_up_state && wood_down_state && !wood_home_state && wood_jet_state && !wood_home_active) { //<-- only goes into this once
+    return 6;
+  } else if (wood_home_active && wood_home_drop && !wood_home_rise) { //if we are in the home enter state AND the proximity sensor has already been tripped
+    return 7;
+  } else if (wood_home_active && wood_home_rise && !wood_home_drop) { //if we either finished dropping or the proximity sensor was never tripped
+    return 8;
+  } else if (wood_up_state && wood_down_state && wood_home_state && !wood_jet_state && !wood_home_active) {
+    return 9;
+  }
+  else{
+  return 10;
+}
+
+}
+//Main state function for the metal stacker
+void metalState(int order) {
+  
+  //auto + prox already tripped = do nothing
+  if (order == 1) {
+    Serial.println("1");
+    metalNothing();
+    //auto + prox not already tripped = lift up
+  } else if (order == 2) {
+    Serial.println("2");
+    metalUp();
+    //idle state = do nothing
+  } else if (order == 3) {
+    Serial.println("3");
+    metalNothing();
+    //move up
+  } else if (order == 4) {
+    Serial.println("4");
+    metalUp();
+    metal_auto = 0; //turn off autonomous mode
+    //move down
+  } else if (order == 5) {
+    Serial.println("5");
+    metalDown();
+    metal_auto = 0;
+    //initiate home sequence
+  } else if (order == 6) {
+    Serial.println("6");
+
+    metal_home_active = 1; //acknowledge that we are entering the home sequence and select the appropriate path
+    metal_auto = 0; //turn off metal_auto, in case (it will be turned back on afterwards anyways)
+    if (digitalRead(right_prox) == LOW) { //if the proximity sensor has been triggered, go down
+      Serial.println("Thought Metal Prox was Blocked");
+      metal_home_drop = 1;
+      metal_home_rise = 0;
+    } else if (digitalRead(right_prox) == HIGH) { //if the proximity sensor has not been triggered, go up
+      Serial.println("Thought Metal Prox was NOT Blocked");
+      
+      metal_home_rise = 1;
+      metal_home_drop = 0;
+    }
+  } else if (order == 7) { //home state - going down
+    Serial.println("7");
+    //if the proximity sensor is still tripped go down
+    if (digitalRead(right_prox) == LOW) {
+      metalDown();
+      
+    } else if (digitalRead(right_prox) == HIGH){
+      metalNothing();
+      metal_home_rise = 1;
+      metal_home_drop = 0;
+    }
+  } else if (order == 8) { //home state - going up
+    Serial.println("8");
+    if (digitalRead(right_prox) == HIGH) {
+      metalUp();
+    } else {
+      //Turn off the metal_home_drop and rise states
+      metal_home_drop = 0;
+      metal_home_rise = 0;
+      metal_home_active = 0; //turn off metal_home_state
+      metal_auto = 1;
+    }
+  } else if (order == 9) {
+    Serial.println("9");
+    metalJet();
+  }else if (order == 10) {
+    Serial.println("10");
+    metalUp();
+    delay(100);
+    metalUp();
+  } else if (order == 11){
+    Serial.print("wtf");
+  }
+}
+ 
+//Main state function for the wood stacker
+//It is basically identical to the metal state code except it controls the wood stacker outputs
+void woodState(int order) {
+  
+  //Serial.println(order);
+  //auto + prox already tripped = do nothing
+  if (order == 1) {
+    //Serial.println("1");
+    woodNothing();
+    //auto + prox not already tripped = lift up
+  } else if (order == 2) {
+    //Serial.println("2");
+    woodUp();
+    //idle state = do nothing
+  } else if (order == 3) {
+    //Serial.println("3");
+    woodNothing();
+    //move up
+  } else if (order == 4) {
+    //Serial.println("4");
+    woodUp();
+    wood_auto = 0; //turn off autonomous mode
+    //move down
+  } else if (order == 5) {
+    //Serial.println("5");
+    woodDown();
+    wood_auto = 0;
+    //initiate home sequence
+  } else if (order == 6) {
+    //Serial.println("6");
+    wood_home_active = 1; //acknowledge that we are entering the home sequence and select the appropriate path
+    wood_auto = 0; //turn off metal_auto, in case (it will be turned back on afterwards anyways)
+    readWoodSensor();
+    if (wood_prox == 0) { //if the proximity sensor has been triggered, go down
+      //Serial.println("Thought Metal Prox was Blocked");
+      wood_home_drop = 1;
+      wood_home_rise = 0;
+    } else if (wood_prox == 1) { //if the proximity sensor has not been triggered, go up
+      //Serial.println("Thought Metal Prox was NOT Blocked");
+      wood_home_rise = 1;
+      wood_home_drop = 0;
+    }
+  } else if (order == 7) { //home state - going down
+    //Serial.println("7");
+    //if the proximity sensor is still tripped go down
+   readWoodSensor();
+    if (wood_prox == 0) {
+      woodDown();
+      delay(1);
+    } else {
+      wood_home_rise = 1;
+      wood_home_drop = 0;
+    }
+  } else if (order == 8) { //home state - going up
+    //Serial.println("8");
+    readWoodSensor();
+    if (wood_prox == 1) {
+      woodUp();
+    } else {
+      //Turn off the metal_home_drop and rise states
+      wood_home_drop = 0;
+      wood_home_rise = 0;
+      wood_home_active = 0; //turn off metal_home_state
+      wood_auto = 1;
+    }
+  } else if (order == 9) {
+    //Serial.println("9");
+    woodJet();
+  }
+}
+//Code for the METAL driver's linear actuator
+void switchForward() {
+  digitalWrite(motorON, LOW);
+  delay(1);
+  digitalWrite(motorAP, LOW);
+  delay(1);
+}
+void switchBackwards() {
+  digitalWrite(motorON, LOW);
+  delay(1);
+  digitalWrite(motorAP, HIGH);
+  delay(1);
+}
+void metalUp() {
+  switchForward();
+  digitalWrite(motorON, HIGH);
+  delay(100);
+}
+void metalDown() {
+  switchBackwards();
+  digitalWrite(motorON, HIGH);
+  delay(100);
+}
+void metalNothing() {
+  digitalWrite(motorON, LOW);
+}
+void metalJet() {
+  digitalWrite(metaljet, HIGH);
+  delay(1000); //do this for 1 second
+  digitalWrite(metaljet, LOW);
+}
+//Code for the WOODEN stepper motor driver
+void woodDown() {
+  for (int i=0; i <= 255; i++){
+  digitalWrite(StepPulse, HIGH);
+  motorPosition--;
+  delayMicroseconds(500);
+  digitalWrite(StepPulse, LOW);
+  
+  }
+}
+void woodUp() {
+  for (int i=0; i <= 255; i++){
+  digitalWrite(DirectionSelect, HIGH);
+  motorPosition++;
+  delayMicroseconds(500);
+  digitalWrite(DirectionSelect, LOW);
+  
+  }
+}
+//KevinC Note: Given the nature of how the stepper motor works compared to the linear actuator, I believe that 'idling' the
+//stepper motor will simply require the stepper to recieve no signals at all, please let me know if that is not how it works
+void woodNothing() {
+  //Empty on purpose
+}
+void woodJet() {
+  digitalWrite(woodjet, HIGH);
+  delay(500); //do this fo1 second
+  digitalWrite(woodjet, LOW);
+}
+//Reads the sensor for the wooden stacker
+//The wood_prox variable is set to 0 for deadzone and 1 for not dead zone to stay consistent with the metal_prox reading
+void readWoodSensor() {
+  if(digitalRead(left_prox) == LOW) {
+    wood_prox = 0;
+  } else {
+    wood_prox = 1;
+  }
+  
+}
+  void readMetalSensor() {
+    if(digitalRead(metal_bottom) == LOW) {
+    metal_bottom_state = 0;
+  } else {
+    metal_bottom_state = 1;
+  }
+  if(digitalRead(right_prox) == LOW) {
+    metal_prox = 0;
+  } else {
+    metal_prox = 1;
+  }
+  if(digitalRead(metal_home) == LOW) {
+        Home = 0;
+      } else {
+        Home = 1;
+      }//Serial.print("\thome");
+      //Serial.println(Home);
+
+}
