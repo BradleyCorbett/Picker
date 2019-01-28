@@ -1,0 +1,972 @@
+
+
+// Test motor joint mode
+#include <Wire.h>
+#include "DynamixelMotor.h"
+#include <LiquidCrystal.h>
+#include <Servo.h>
+#include <AccelStepper.h>
+#include <EEPROM.h>
+#include <SoftwareSerial.h>
+#include <ODriveArduino.h>
+
+//servo numbesr
+Servo ServoNumberFan;                                                     //////////////////////////////
+Servo NumberUpDn;     /////////////////////////////
+
+// software serial pins, if you use software serial for the dinamixles
+#define SOFT_RX_PIN 2
+#define SOFT_TX_PIN 3
+
+
+// Printing with stream operator
+template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
+template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
+
+// Serial to the ODrive
+SoftwareSerial odrive_serial(12, 13); //RX (ODrive TX), TX (ODrive RX)
+// Note: you must also connect GND on ODrive to GND on Arduino!
+
+// ODrive object
+ODriveArduino odrive(odrive_serial);
+
+
+//stepper controll for arms 
+#define DirectionSelect  22 //direction
+#define StepPulse 24  //step 
+#define Enable  26 //high is on
+
+
+const uint8_t M1id = 1; // Set up motor IDs here
+const uint8_t M2id = 2;
+
+// select the pins used on the LCD panel
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+// define some values used by the panel and buttons
+int pos = 0;                                                                /////////////////////
+int pos1 = 89;                                                              /////////////////////
+int pos2 = 64;                                                              /////////////////////
+int pos3 = 50;                                                              /////////////////////
+int pos4 = 50;
+
+int posVert = 100;
+int posFan = 0;
+
+int lcd_key     = 0;
+int adc_key_in  = 0;
+int CurrentScreen = -1;
+int PickHeight = 0;
+int MaxHeight = 0;
+int condition = 0;
+
+int StackLedPin = 48;
+int LedPin = 36;//leds for scanning
+int PhotoPin =A8;//sensors for plix amount
+int PhotoPin1 = A9;
+int PhotoPin2 = A10;
+int AmbientPin = A11;
+int SwitchPin = 34;
+int RightEndStopPin = 38;
+int Signal = 44;
+int AirSignal = 46;
+int LeftEndStopPin = 28;
+ 
+
+int val;
+int encoder0PinA = 40;
+int encoder0PinB = 42;
+int encoder0Pos = 0;
+int encoder0PinALast = LOW;
+int n = LOW;
+
+int reading;
+float PhotoReading;
+float PhotoReading1;
+float PhotoReading2;
+float AmbientReading;
+int PlixNumber = 0;//amount of plix on head
+int y = 0;//loop
+int Average = 0;//average fof sensors
+float motorPosition = 0;
+
+float pie=3.14159;
+int sinsize=400; //can not be <400 or min servo resolution default sin wave size (trough to peak or pie in length)
+float event=sinsize * 15;  //cycles count limiter not really important as long as speed of servo isn't super slow
+int startPosition  =80;  //servo# closed position
+int finalPosition  =100;   //servo# open position
+int WiggleDown = 555;
+int WiggleUp = 590;
+
+
+//variables for use in all servo functions per servo
+
+float count1 =0; // sine wave x variable counts from 1 to 1700 (servo resolution) only starts counting after wait# reaches its activation value.
+float speed1=0;  //a value that consists of small increment values that change in magnitude depending on if the wave starts slow and ends fast or vise versa.
+float speedtick1=0; //ticks off how long the hold position for the servo is in very small ms increments giving the illusion of a slower or faster moving servo
+
+                 // y= a*sin(bx+c)+d
+                 // yvar# = a#(sin (b#*count#+c#)+d#
+float yvar1=0;   // actual ms value thrown at servo ranged, paused, speed shifted etc.
+float a1=0;     //a# amplitude higher value taller wave shorter value shorter wave by magnitude:   a=(highest # - lowest #)/2
+float b1=0;     //b# lower value = longer wave or higher value=shorter wave this is phase shift or stretch of function b=2pi/(blabla*2) where blabla are desired wave size
+float c1=0;     //c# is x frequency offset = what part of curve want to look at
+float d1=0;     //d# is y offset  = 0.5*amplitude shifts the curve so it is wholey in 1st quadrant
+int per1=0;     //trigger value either 0 or 1 to declare that that servo has reached its final position and so servo movement sequence of all servos (once all report per#=1)can end.
+int ramp = 1000;
+
+#define btnRIGHT  0
+#define btnUP     1
+#define btnDOWN   2
+#define btnLEFT   3
+#define btnSELECT 4
+#define btnNONE   5
+
+int motor1speed;
+int motor2speed;
+int motor1target;
+int motor2target;
+AccelStepper stepperB(1, 24, 22);
+int Acceleration = 8000;
+int MaxSpeed = 6500;
+
+// communication baudrate
+const long unsigned int baudrate = 9615;
+
+// hardware serial without tristate buffer
+// see blink_led example, and adapt to your configuration
+HardwareDynamixelInterface interface(Serial);
+
+DynamixelMotor motor1(interface, M1id);
+DynamixelMotor motor2(interface, M2id);
+
+uint8_t led_state = true;
+
+int CurrentState = 0;
+
+// read the buttons
+int read_LCD_buttons()
+{
+  adc_key_in = analogRead(0);      // read the value from the sensor
+  // my buttons when read are centered at these valies: 0, 144, 329, 504, 741
+  // we add approx 50 to those values and check to see if we are close
+  if (adc_key_in > 1000) return btnNONE; // We make this the 1st option for speed reasons since it will be the most likely result
+  // For V1.1 us this threshold
+  if (adc_key_in < 50)   return btnRIGHT;
+  if (adc_key_in < 250)  return btnUP;
+  if (adc_key_in < 450)  return btnDOWN;
+  if (adc_key_in < 650)  return btnLEFT;
+  if (adc_key_in < 850)  return btnSELECT;
+
+
+  return btnNONE;  // when all others fail, return this...
+}
+
+
+
+void motor1setposition(int position, int speed) {
+
+  motor1.speed(speed);
+  motor1.goalPosition(position);
+  motor1target = position;
+}
+
+void motor2setposition(int position, int speed) {
+
+  motor2.speed(speed);
+  motor2.goalPosition(position);
+  motor2target = position;
+}
+
+
+bool motor1inposition()
+{
+  if ( abs(motor1.currentPosition() - motor1target) <= 8) {
+    return HIGH;
+  } else {
+    return LOW;
+  }
+}
+
+bool motor2inposition()
+{
+  if ( abs(motor2.currentPosition() - motor2target) <= 8) {
+    return HIGH;
+  } else {
+    return LOW;
+  }
+}
+//functions
+void FanCalabrate();                                              /////////////////////
+void FanReverse();
+void FanHold();                                                   /////////////////////
+void FanMid();                                                    /////////////////////
+void FanHigh();                                                   /////////////////////
+
+void VertDown();
+void VertTouch();
+void Vert10mm();
+void VertMid();
+void VertMaxUp();
+
+void WingCleanDownFromFlat();                                     /////////////////////
+void WingCleanUpFromFlat();                                       /////////////////////
+
+void WingDown();                                         /////////////////////
+void WingFlat();                                         /////////////////////
+void WingUp();                                           /////////////////////
+void WingHalfDown();
+
+void ArmsLeft();
+void ArmsRight();
+void ArmsCalibrate();
+void ArmPos();
+
+
+void Scanner();
+void HowManyLeft();
+
+
+void setup()
+{
+  // pinMode(11, OUTPUT);
+  pinMode(SwitchPin, INPUT_PULLUP);
+  pinMode(PhotoPin,  INPUT); 
+  pinMode(PhotoPin1,  INPUT);
+  pinMode(PhotoPin2,  INPUT);
+  pinMode(AmbientPin,  INPUT);
+  pinMode(LedPin,  OUTPUT);
+  pinMode(StepPulse, OUTPUT);
+  pinMode(DirectionSelect, OUTPUT);
+  pinMode(Enable, OUTPUT);
+  pinMode(Signal, OUTPUT);
+  pinMode(AirSignal, OUTPUT);
+  pinMode(RightEndStopPin, INPUT_PULLUP);
+  pinMode(LeftEndStopPin, INPUT_PULLUP);
+  pinMode(encoder0PinA, INPUT_PULLUP);
+  pinMode(encoder0PinB, INPUT_PULLUP);
+  
+  ServoNumberFan.write(pos1);                                     /////////////////////
+  //NumberUpDn.write(posVert);                                    /////////////////////
+  ServoNumberFan.attach(30);                                      /////////////////////
+  NumberUpDn.attach(32);                                     /////////////////////
+
+  //Setup LCD
+  lcd.begin(16, 2);              // start the library
+  lcd.setCursor(0, 0);
+  PickHeight = EEPROM.read(0);
+  MaxHeight = EEPROM.read(1);
+
+  //setup motors
+  interface.begin(baudrate);
+  delay(100);
+  odrive_serial.begin(115200);
+  //Serial.begin(9600);
+  digitalWrite(Enable, HIGH);
+  digitalWrite(Signal, HIGH);
+  digitalWrite(AirSignal, HIGH);
+
+  // check if we can communicate with the motor
+  // if not, we turn the led on and stop here
+  uint8_t status = motor1.init();
+  if (status != DYN_STATUS_OK)
+  {
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    lcd.setCursor(0, 0);
+    lcd.print("M1 not talking");
+    while (1);
+  }
+
+  uint8_t status1 = motor2.init();
+  if (status1 != DYN_STATUS_OK)
+  {
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    lcd.setCursor(0, 1);
+    lcd.print("M2 not talking");
+    while (1);
+  }
+
+
+  motor1.enableTorque();
+  motor2.enableTorque();
+
+  // set to joint mode, with a 180° angle range
+  // see robotis doc to compute angle values
+  motor1.jointMode(204, 820);
+  motor2.jointMode(204, 820);
+  
+  FanCalabrate();
+  movef(NumberUpDn, event,50,5,5,MaxHeight,MaxHeight-10);
+  delay(ramp);
+  //VertMid();
+  WingFlat();
+}
+
+void loop()
+
+{
+  //lcd.setCursor(14, 0);
+  //lcd.print(CurrentState);
+
+  switch (CurrentState) {
+    /////////////////////////
+case 0:
+      ArmsCalibrate();
+      Serial << "Axis" << 0 << ": Requesting state " << 5 << '\n';
+      odrive.run_state(0, 5, false);
+      lcd.setCursor(0, 0);
+      lcd.print("Arms Calibrated");
+      CurrentState = 10;
+      //delay(500);
+    break;
+    
+    
+      
+    
+    
+    case 10:
+    FanOff();
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("waiting for switch");
+      CurrentState = 20;
+    break;
+    
+    case 20:
+     //Wait for switch
+     
+     
+      reading = digitalRead(SwitchPin);
+      
+      
+      if(reading == HIGH){
+        FanHigh();
+        
+        
+        delay(100);
+        
+      //if(read_LCD_buttons() == btnSELECT){
+        lcd.setCursor(0, 0);
+        lcd.print("Begining");
+        CurrentState = 100;
+        //delay(400);
+      }else if (read_LCD_buttons() == btnSELECT) {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("------MENU------");
+        Menu();
+      }
+        
+    break;
+    
+    
+
+    case 100:
+      //Go to pickup
+      y = 0;
+      WiggleDown = 555;
+      WiggleUp = 590;
+      
+      digitalWrite(AirSignal, HIGH);
+      
+      movef(NumberUpDn, event,500,5,25,MaxHeight-10,PickHeight);
+      delay(300);
+      movef(NumberUpDn, event,500,40,25,PickHeight,MaxHeight-10);
+      
+      //delay(50);
+      FanHold();
+      CurrentState = 200;
+    break;
+    
+    case 200:
+      //Start scanning sequence
+      lcd.setCursor(0, 0);
+      lcd.print("Chosing");
+      
+      FanHold();
+      //delay(200);
+      Scanner();
+      //delay(200);
+      
+      if (PlixNumber ==0){
+        lcd.setCursor(0, 0);
+        lcd.print("zero");
+        CurrentState = 10;
+      }else if (PlixNumber == 1){
+        lcd.setCursor(0, 0);
+      lcd.print("one");
+        CurrentState = 600;
+      }else if (PlixNumber > 1){
+        if (y<4){
+          lcd.setCursor(0, 0);
+          lcd.print("more than one");
+          CurrentState = 300;
+        }else if (y >= 4){
+          CurrentState = 700;
+          lcd.setCursor(0, 0);
+          lcd.print("giving up");
+        }
+        
+        
+      } //delay(500);
+    break;
+    
+    
+
+   case 300:
+      lcd.setCursor(6, 1);
+      lcd.print(y);
+      FanMid();
+      WingDown();
+      delay(500);
+      if ( motor1inposition() &&  motor2inposition()) { /////////////this if checks if wing movement is done
+        CurrentState = 400;
+      } 
+   break;
+
+   case 400:
+         WingUp();
+         delay(500);
+      if ( motor1inposition() &&  motor2inposition()) { /////////////this if checks if wing movement is done
+        CurrentState = 500;
+      }
+    break;
+
+   case 500:
+      //Finish Seperating
+      WingFlat();
+      if ( motor1inposition() &&  motor2inposition()) { /////////////this if checks if wing movement is done
+        CurrentState = 200;
+        //delay(200);
+        y++;
+        WiggleDown = WiggleDown - 25;
+        WiggleUp = WiggleUp + 10;
+        delay(300);
+        lcd.setCursor(0, 0);
+        lcd.print("end of flex");
+      } 
+   break;
+
+   case 600:
+      movef(NumberUpDn, event,5,5,5,MaxHeight-10,MaxHeight);
+      FanHold();
+      //delay(500);
+      
+      CurrentState = 700; 
+   break;
+
+   case 700:
+    stepperB.setMaxSpeed(-MaxSpeed);
+    stepperB.setCurrentPosition(0);
+    stepperB.setAcceleration(Acceleration);
+    stepperB.moveTo(-3000);
+    stepperB.setSpeed(-MaxSpeed);
+    //move to other side
+    ArmsRight();
+    
+    lcd.setCursor(0, 0);
+    lcd.print("Moving to drop off");
+    //delay(500);
+    CurrentState = 710;
+   break;
+   
+   case 710:
+    Scanner();
+    
+    if (PlixNumber == 0){
+      lcd.setCursor(0, 0);
+      lcd.print("Nothing try again");
+      CurrentState = 910;
+    }else if (PlixNumber >= 1){
+      CurrentState = 800;
+    }
+    
+   break;
+   
+   case 800:
+    
+    movef(NumberUpDn, event,5,5,5,MaxHeight,MaxHeight-10);
+    lcd.setCursor(0, 0);
+    lcd.print("Waiting for conveyer");
+    //delay(500);
+    movef(NumberUpDn, event,5,5,5,MaxHeight-10,MaxHeight-20);//drop off height. might need a seperate varible
+    FanOff();
+    FanReverse();
+    digitalWrite(Signal, LOW);
+    delay(200);
+    digitalWrite(Signal, HIGH);
+    CurrentState = 900;
+   break;
+   
+   case 900:
+   
+    movef(NumberUpDn, event,5,5,5,MaxHeight-20,MaxHeight);
+    FanOff();
+    CurrentState = 910;
+    
+   break;
+   
+   case 910:
+    stepperB.setMaxSpeed(MaxSpeed);
+    stepperB.setCurrentPosition(0);
+    stepperB.setAcceleration(Acceleration);
+    stepperB.moveTo(3000);
+    stepperB.setSpeed(MaxSpeed);
+    ArmsLeft();
+    CurrentState = 1000;
+    //delay(500);
+   break;
+
+   case 1000:
+     //Wait for button so can check plix pickup
+      //lcd.setCursor(0, 0);
+      //lcd.print(reading);
+      reading = digitalRead(SwitchPin);
+      
+      if(reading == HIGH){
+        FanOff();
+        //lcd.setCursor(0, 0);
+        //lcd.print(reading);
+        delay(10);
+       CurrentState = 1100;
+      }
+      if(reading == LOW){
+        FanOff();
+        //lcd.setCursor(0, 0);
+        //lcd.print(reading);
+        delay(10);
+        CurrentState = 10;
+        
+      }
+   break;
+   
+   case 1100:
+     FanOff();
+     CurrentState = 10;
+   break;
+
+    
+}
+}
+
+
+
+////////////////////////////// function's  //////////////////////////
+int servoMove(int angle1, int angle2, Servo servoNumber, int servoSpeed) {
+
+  if (angle1 >= angle2) {
+    for (pos = angle1 ; pos >= angle2  ; pos -= 1 )
+    { servoNumber .write(pos);
+      delay(  servoSpeed );
+    }
+  }
+
+  if (angle1 <= angle2) {
+    for (pos = angle1 ; pos <= angle2  ; pos += 1 )
+    { servoNumber .write(pos);
+      delay(  servoSpeed );
+    }
+  }
+  return angle2;
+}
+
+void FanCalabrate() {
+  Serial << "Axis" << 0 << ": Requesting state " << 5 << '\n';
+      odrive.run_state(0, 5, false);
+  lcd.print("Fan cal");
+  delay(2000);
+}
+void FanOff() {
+   odrive.SetVelocity(0, 0);
+        delay(5);
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan off");
+  //  delay(5000);
+
+}
+void FanReverse() {
+  odrive.SetVelocity(0, 0);
+   delay(300);
+   odrive.SetVelocity(0, -300);
+   delay(300);
+   odrive.SetVelocity(0, -2000);
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan Reverse");
+  //  delay(5000);
+
+}
+
+void FanHold() {
+   odrive.SetVelocity(0, 3000);
+        delay(5);
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan Hold");
+  //  delay(5000);
+
+}                                                  /////////////////////
+void FanMid() {
+   odrive.SetVelocity(0, 3000);
+        delay(5);
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan Mid");
+  //  delay(5000);
+
+}                                                    /////////////////////
+void FanHigh() {
+   odrive.SetVelocity(0, 3999);
+        delay(5);
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan idle");
+  //  delay(5000);
+
+}                                                   /////////////////////
+
+
+
+
+void WingDown() {
+      lcd.setCursor(0, 0);
+      lcd.print("Wings Down");/////////////////////
+  motor1setposition(WiggleDown, 300);
+  motor2setposition(WiggleDown, 300);
+}
+void WingFlat(){/////////////////////
+        lcd.setCursor(0, 0);
+      lcd.print("Wings Flat");
+  motor1setposition(575, 300);
+  motor2setposition(580, 300); 
+}
+void WingUp(){
+      lcd.setCursor(0, 0);
+      lcd.print("Wings Up");
+  motor1setposition(WiggleUp, 300);
+  motor2setposition(WiggleUp, 300); 
+}
+
+void WingHalfDown(){
+      lcd.setCursor(0, 0);
+      lcd.print("Wings HaDown");
+  motor1setposition(480, 300);
+  motor2setposition(480, 300); 
+}
+
+void Scanner(){
+  //delay(100);
+  PhotoReading=0;
+  PhotoReading1=0;
+  PhotoReading2=0;
+  Average=0;
+  digitalWrite(LedPin, HIGH);
+  delay(10);
+  for(int i = 0 ; i <= 500 ; i++){
+    PhotoReading = PhotoReading + analogRead(PhotoPin);
+    PhotoReading1 = PhotoReading1 + analogRead(PhotoPin1);
+    PhotoReading2 = PhotoReading2 + analogRead(PhotoPin2);
+    //AmbientReading = AmbientReading + analogRead(AmbientPin);
+    
+  }
+  PhotoReading = 1000- (PhotoReading/500);
+  PhotoReading1 = 1000- (PhotoReading1/500);
+  PhotoReading2 = 1000- (PhotoReading2/500);
+  //AmbientReading = AmbientReading/500;
+  digitalWrite(LedPin, LOW);
+  Average = ((PhotoReading + PhotoReading1 + PhotoReading2)/3);
+  lcd.setCursor(0, 1);
+  lcd.print(Average);
+  if (Average < 450){
+    PlixNumber = 0;
+  }else if (Average >=450 && Average <700){
+    PlixNumber = 1;
+  }else if (Average >=700){
+    PlixNumber = 2;
+  }
+  return;
+}
+void ArmsRight(){
+  while (stepperB.distanceToGo()!=0){
+  stepperB.run();
+    
+  }
+  while (digitalRead(RightEndStopPin) == HIGH){
+    stepperB.setSpeed(-45);
+    stepperB.setMaxSpeed(-400);
+    stepperB.runSpeed();
+       
+  }
+ 
+  return;
+}
+void ArmsLeft(){
+  while (stepperB.distanceToGo()!=0){
+  stepperB.run();
+    
+  }
+  while (digitalRead(LeftEndStopPin) == HIGH){
+    stepperB.setSpeed(45);
+    stepperB.setMaxSpeed(400);
+    stepperB.runSpeed();
+       
+  }
+ 
+  return;
+}
+void ArmPos(){
+  n = digitalRead(encoder0PinA);
+  if ((encoder0PinALast == LOW) && (n == HIGH)) {
+    if (digitalRead(encoder0PinB) == LOW) {
+      encoder0Pos--;
+    } else {
+      encoder0Pos++;
+    }
+    Serial.print (encoder0Pos);
+    Serial.print ("/");
+  }
+  encoder0PinALast = n;
+  return;
+}
+void ArmsCalibrate(){
+    lcd.setCursor(0, 0);
+    lcd.print("Arms cal begin");
+    encoder0Pos = 0;
+  if (digitalRead(LeftEndStopPin) == LOW){
+    digitalWrite(StepPulse, LOW);
+    return;
+  }
+  
+  while (digitalRead(LeftEndStopPin) == HIGH){
+      //if(read_LCD_buttons() == btnSELECT){
+        digitalWrite(DirectionSelect, HIGH);
+        digitalWrite(StepPulse, HIGH);
+        motorPosition--;
+        delayMicroseconds(1000);
+        digitalWrite(StepPulse, LOW);
+       delayMicroseconds(1000);
+       digitalRead(LeftEndStopPin);
+  }
+  
+}
+
+void movef(Servo servoPoint, float ecycle,float w81,float spa1,float spb1,float yprev1,float ynext1)
+{
+
+  yprev1 = map(yprev1 , 0,180 ,1000,2000);
+  ynext1 = map(ynext1 , 0,180 ,1000,2000);
+
+         delay(1);   //master delay
+         count1 = 1;   //reset of count#
+         speedtick1 = 1;  //reset of speedtick#
+         b1=(2*pie/(sinsize*2));  //coefficient of sine math function
+
+
+            if(ynext1 > yprev1)  //sets sine wave coefficients depending on positions
+            {
+              a1= (ynext1-yprev1)/2;  //coefficient of sine math function
+              c1= (1.5)*pie;           //coefficient of sine math function
+              d1= yprev1+a1;            //coefficient of sine math function
+            }
+            else  //(ynext# < yprev#)
+            {
+              a1= (yprev1-ynext1)/2;
+              c1= (0.5)*pie;
+              d1= yprev1-a1;
+            }
+
+              //###coefficient establishment for all sine waves end ###
+
+            int per1=0; //reset of all trigger values in case there is carry over from a previous run
+
+
+       //global loop for all servos cycles by each servo and sees if it has an tiny move.
+       for (float count = 0; count < ecycle; count +=1)
+       {
+         //traditional speed values start off as spa# and end up as spb# as count# ticks away on the fly as curve is being drawn.
+        // result is a sine curve that is compressed in the x axis on one end (spa#=large number) and stretched on other end (spb#=small number).
+
+         if (spa1 > spb1) {speed1=((count1+1)/sinsize)*(spa1-spb1) + spb1;} //start fast end slow
+         else {speed1= ((count1+1)/sinsize)*(spb1-spa1)+ spa1;} // start slow end fast
+
+
+  // servo #1   3 states or cases
+        if (count < w81) //case 1 servo not ready to move yet
+            {
+            servoPoint.writeMicroseconds(yprev1);
+
+            }
+
+         else if (count>w81 && count1 > sinsize) //case 3 motion is done and position is held
+            {
+            servoPoint.writeMicroseconds(ynext1);
+
+            per1=1; //declares this servo is finished with its movement
+            }
+
+         else if (count > w81)   //case 2 sin wave function active with optional hold position while big loop asks other servos for their turn
+            {
+
+              if (count1 < sinsize && speedtick1 == 1)  //new position of servo is written
+                {
+                   yvar1= a1*sin((count1)*b1+c1)+d1;  //the math function
+                   servoPoint.writeMicroseconds(yvar1);   //throws a command at the servo
+                   speedtick1 += 1; // start of increment to count for possible pauses at this position to simulate slow
+                   count1 += 1; //increments sine wave operator x in y=f(x)
+
+                }
+                else if (speedtick1 > 1 && speedtick1 < speed1)  //sine wave is sustained at old value for 1 to speed# as counted by speedtick#
+                {
+                  servoPoint.writeMicroseconds(yvar1);
+                  speedtick1 += 1;  //increments speedtick1 to delay the servo at one position along its travel to simulate a speed
+
+                }
+                else //sine wave is now permitted to continue by having speedtick# reset
+                {
+                  count1+=1; //lock out the sine function from going past sinsize by ever increasing count#
+                 speedtick1 = 1; //reset for next fly through of sine function
+
+                }
+            }  //end if statement for case 2
+
+
+       if(per1 == 1)//breaks FOR loop out of further un necessary cycles as all servos report their movement complete
+         {
+          break;
+         }
+
+   }  //end of for loop statement for all servo steps
+
+} //end of void subroutine function for entire move function
+
+void Menu(){
+  delay(200);
+  while (reading == LOW){
+  if (read_LCD_buttons() == btnUP) {
+    //i = 1;
+    CurrentScreen --;
+    if (CurrentScreen <=0){
+      CurrentScreen = 0;
+    }
+    Parameters();
+    delay(100);
+  } else if (read_LCD_buttons() == btnDOWN) {
+    //i = 2;
+    CurrentScreen ++;
+    if (CurrentScreen >=3){
+      CurrentScreen = 3;
+    }
+    Parameters();
+    delay(100);
+  } else if (read_LCD_buttons() == btnLEFT) {
+    condition = 1;
+    Parameters();
+    delay(50);
+  } else if (read_LCD_buttons() == btnRIGHT) {
+    condition = 2;
+    Parameters();
+    delay(50);
+  } else if (read_LCD_buttons() == btnSELECT) {
+    switch (CurrentScreen) {
+      case 0:
+        EEPROM.write(0, PickHeight);
+        if (0 == EEPROM.length()) {
+          
+        }
+        lcd.setCursor(11, 1);
+        lcd.print("SAVED");
+        delay(100);
+      break;
+      case 1:
+        EEPROM.write(1, MaxHeight);
+        if (1 == EEPROM.length()) {
+          
+        }
+        lcd.setCursor(11, 1);
+        lcd.print("SAVED");
+        delay(100);
+      break;
+    }
+  }reading = digitalRead(SwitchPin);
+}}
+
+void Parameters() {
+    switch (CurrentScreen) {
+
+      case 0:
+        //lcd.clear();
+        if (condition == 1) {
+          PickHeight--;
+
+        } else if (condition == 2) {
+          PickHeight++;
+
+        }
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Head pick height");
+        lcd.setCursor(0, 1);
+        lcd.print(PickHeight);
+
+        condition = 0;
+        delay(100);
+        break;
+
+      case 1:
+        if (condition == 1) {
+          MaxHeight--;
+
+        } else if (condition == 2) {
+          MaxHeight++;
+
+        }
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Head max height");
+        lcd.setCursor(0, 1);
+        lcd.print(MaxHeight);
+
+        condition = 0;
+        delay(100);
+      break;
+      case 2:
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Move arms");
+        lcd.setCursor(0, 1);
+        lcd.print("Left       Right");
+        //lcd.clear();
+        if (condition == 1) {
+          while (digitalRead(LeftEndStopPin) == HIGH){
+            //if(read_LCD_buttons() == btnSELECT){
+            digitalWrite(DirectionSelect, HIGH);
+            digitalWrite(StepPulse, HIGH);
+            motorPosition--;
+            delayMicroseconds(1000);
+            digitalWrite(StepPulse, LOW);
+            delayMicroseconds(1000);
+            digitalRead(LeftEndStopPin);
+          }
+        } else if (condition == 2) {
+            while (digitalRead(RightEndStopPin) == HIGH){
+              //if(read_LCD_buttons() == btnSELECT){
+              digitalWrite(DirectionSelect, LOW);
+              digitalWrite(StepPulse, HIGH);
+              motorPosition++;
+              delayMicroseconds(1000);
+              digitalWrite(StepPulse, LOW);
+              delayMicroseconds(1000);
+              digitalRead(RightEndStopPin);
+            }
+
+        }
+        
+        condition = 0;
+        delay(100);
+        break;
+
+      case 3:
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("last");
+        delay(100);
+        break;
+    }
+  }
