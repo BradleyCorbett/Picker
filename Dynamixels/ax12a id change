@@ -1,0 +1,63 @@
+// Demonstrate how to change the communication baudrate of a motor
+// This can be usefull if you want to reduce baudrate, in order to
+// use a software serial, or if you need 2Mbaud for high speed communication
+
+#include "DynamixelMotor.h"
+
+#define SOFT_RX_PIN 3
+#define SOFT_TX_PIN 4
+// motor id
+const uint8_t id=1;
+const uint8_t idAfter=2;
+
+const unsigned long baudrate=9615;
+
+// hardware serial without tristate buffer
+// see blink_led example, and adapt to your configuration
+SoftwareDynamixelInterface interface(SOFT_RX_PIN, SOFT_TX_PIN);
+
+DynamixelMotor motor(interface, id);
+
+// the led should blink twice
+void setup() 
+{
+  // start communication at old baudrate
+  interface.begin(baudrate);
+  delay(100);
+    // check if we can communicate with the motor
+  // if not, we turn the led on and stop here
+  uint8_t status=motor.init();
+  if(status!=DYN_STATUS_OK)
+  {
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    while(1);
+  }
+
+  
+  // make the motor led blink once
+  motor.init();
+  motor.led(HIGH);
+  delay(1000);
+  motor.led(LOW);
+  delay(1000);
+  
+  // set motor baudrate to new ID
+  motor.changeId(idAfter);
+
+    // make the motor led blink once
+  motor.init();
+  motor.led(HIGH);
+  delay(1000);
+  motor.led(LOW);
+  delay(1000);
+  
+  // set arduino baudrate at new baudrate
+  delay(1000);
+
+  
+
+  
+}
+
+void loop(){}
