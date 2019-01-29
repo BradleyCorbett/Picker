@@ -1,6 +1,6 @@
 
 
-// Test motor joint mode
+// Test motor 
 #include <Wire.h>
 #include "DynamixelMotor.h"
 #include <LiquidCrystal.h>
