@@ -129,6 +129,7 @@ void loop() {
      } else if(digitalRead(wood_jet) == LOW){
      Serial.println("Wood Jet");
      }else if(digitalRead(Signal) == LOW){
+       Operation();
      Serial.println("Home");
      }
      
@@ -383,6 +384,19 @@ void woodState(int order) {
     woodJet();
   }
 }
+
+void Operation(){
+  for (int i=0; i <= 5; i++){
+    woodDown();
+  }digitalWrite(woodjet, HIGH);
+  digitalWrite(metaljet, HIGH);
+  for (int i=0; i <= 4; i++){
+    woodUp();
+  }digitalWrite(woodjet, LOW);
+  digitalWrite(metaljet, LOW);
+  return;
+}
+
 //Code for the METAL driver's linear actuator
 void switchForward() {
   digitalWrite(motorON, LOW);
