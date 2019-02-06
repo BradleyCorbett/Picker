@@ -1,0 +1,482 @@
+// Test motor joint mode
+#include <Wire.h>
+#include "DynamixelMotor.h"
+#include <LiquidCrystal.h>
+#include <Servo.h>
+
+//servo numbesr
+Servo ServoNumberFan;                                                     //////////////////////////////
+Servo ServoNumberUpDn;                                                    /////////////////////////////
+
+// software serial pins, if you use software serial
+#define SOFT_RX_PIN 2
+#define SOFT_TX_PIN 3
+
+const uint8_t M1id = 1; // Set up motor IDs here
+const uint8_t M2id = 2;
+
+// select the pins used on the LCD panel
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+// define some values used by the panel and buttons
+int pos = 0;                                                                /////////////////////
+int pos1 = 50;                                                              /////////////////////
+int pos2 = 64;                                                              /////////////////////
+int pos3 = 50;                                                              /////////////////////
+int pos4 = 50;
+
+int posVert = 64;
+int posFan = 0;
+
+int lcd_key     = 0;
+int adc_key_in  = 0;
+
+int Switchpin = 23;
+int LedPin = 22;
+int PhotoPin =8;
+int PhotoPin1 = 9;
+int PhotoPin2 = 10;
+int AmbientPin = 30;
+int reading;
+float PhotoReading;
+float PhotoReading1;
+float PhotoReading2;
+float AmbientReading;
+int PlixNumber = 0;
+int y = 0;
+int Average = 0;
+
+#define btnRIGHT  0
+#define btnUP     1
+#define btnDOWN   2
+#define btnLEFT   3
+#define btnSELECT 4
+#define btnNONE   5
+
+int motor1speed;
+int motor2speed;
+int motor1target;
+int motor2target;
+
+// communication baudrate
+const long unsigned int baudrate = 9615;
+
+// hardware serial without tristate buffer
+// see blink_led example, and adapt to your configuration
+HardwareDynamixelInterface interface(Serial);
+
+DynamixelMotor motor1(interface, M1id);
+DynamixelMotor motor2(interface, M2id);
+
+uint8_t led_state = true;
+
+int CurrentState = 0;
+
+// read the buttons
+int read_LCD_buttons()
+{
+  adc_key_in = analogRead(0);      // read the value from the sensor
+  // my buttons when read are centered at these valies: 0, 144, 329, 504, 741
+  // we add approx 50 to those values and check to see if we are close
+  if (adc_key_in > 1000) return btnNONE; // We make this the 1st option for speed reasons since it will be the most likely result
+  // For V1.1 us this threshold
+  if (adc_key_in < 50)   return btnRIGHT;
+  if (adc_key_in < 250)  return btnUP;
+  if (adc_key_in < 450)  return btnDOWN;
+  if (adc_key_in < 650)  return btnLEFT;
+  if (adc_key_in < 850)  return btnSELECT;
+
+
+  return btnNONE;  // when all others fail, return this...
+}
+
+
+
+void motor1setposition(int position, int speed) {
+
+  motor1.speed(speed);
+  motor1.goalPosition(position);
+  motor1target = position;
+}
+
+void motor2setposition(int position, int speed) {
+
+  motor2.speed(speed);
+  motor2.goalPosition(position);
+  motor2target = position;
+}
+
+
+bool motor1inposition()
+{
+  if ( abs(motor1.currentPosition() - motor1target) <= 8) {
+    return HIGH;
+  } else {
+    return LOW;
+  }
+}
+
+bool motor2inposition()
+{
+  if ( abs(motor2.currentPosition() - motor2target) <= 8) {
+    return HIGH;
+  } else {
+    return LOW;
+  }
+}
+//functions
+void FanCalabrate();                                              /////////////////////
+void FanIdle();                                                   /////////////////////
+void FanHold();                                                   /////////////////////
+void FanMid();                                                    /////////////////////
+void FanHigh();                                                   /////////////////////
+
+void VertDown();
+void VertTouch();
+void Vert10mm();
+void VertMid();
+void VertMaxUp();
+
+void WingCleanDownFromFlat();                                     /////////////////////
+void WingCleanUpFromFlat();                                       /////////////////////
+
+void WingDown();                                         /////////////////////
+void WingFlat();                                         /////////////////////
+void WingUp();                                           /////////////////////
+void WingHalfDown();
+
+void Scanner();
+
+
+void setup()
+{
+  // pinMode(11, OUTPUT);
+  pinMode(Switchpin, INPUT_PULLUP);
+  pinMode(PhotoPin,  INPUT); 
+  pinMode(PhotoPin1,  INPUT);
+  pinMode(PhotoPin2,  INPUT);
+  pinMode(AmbientPin,  INPUT);
+  pinMode(LedPin,  OUTPUT);
+  ServoNumberFan.write(pos1);                                     /////////////////////
+  ServoNumberUpDn.write(posVert);                                    /////////////////////
+  ServoNumberFan.attach(11);                                      /////////////////////
+  ServoNumberUpDn.attach(12);                                     /////////////////////
+
+  //Setup LCD
+  lcd.begin(16, 2);              // start the library
+  lcd.setCursor(0, 0);
+
+  //setup motors
+  interface.begin(baudrate);
+  delay(100);
+
+  Serial.begin(9600);
+
+  // check if we can communicate with the motor
+  // if not, we turn the led on and stop here
+  uint8_t status = motor1.init();
+  if (status != DYN_STATUS_OK)
+  {
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    lcd.setCursor(0, 0);
+    lcd.print("M1 not talking");
+    while (1);
+  }
+
+  uint8_t status1 = motor2.init();
+  if (status1 != DYN_STATUS_OK)
+  {
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    lcd.setCursor(0, 1);
+    lcd.print("M2 not talking");
+    while (1);
+  }
+
+
+  motor1.enableTorque();
+  motor2.enableTorque();
+
+  // set to joint mode, with a 180° angle range
+  // see robotis doc to compute angle values
+  motor1.jointMode(204, 820);
+  motor2.jointMode(204, 820);
+  
+  FanCalabrate();
+  VertMid();
+  WingFlat();
+}
+
+void loop()
+
+{
+  //lcd.setCursor(14, 0);
+  //lcd.print(CurrentState);
+
+  switch (CurrentState) {
+    /////////////////////////
+
+    case 0:
+     //Wait for switch
+     lcd.setCursor(0, 0);
+      lcd.print("waiting for switch");
+      reading = digitalRead(Switchpin);
+      
+      
+      if(reading == LOW){
+      //if(read_LCD_buttons() == btnSELECT){
+        lcd.setCursor(0, 0);
+        lcd.print("Begining");
+        delay(400);
+        CurrentState = 100;
+    break;
+
+    case 100:
+      //Go to pickup
+      y = 0;
+      Vert10mm();
+      FanHigh();
+      delay(700);
+      VertMid();
+      FanMid();
+      CurrentState = 200;
+    break;
+    
+    case 200:
+      //Start seperate sequence
+      Scanner();
+      delay(200);
+      if (PlixNumber ==0){
+        lcd.setCursor(0, 0);
+        lcd.print("zero");
+        CurrentState = 700;
+      }else if (PlixNumber == 1){
+        lcd.setCursor(0, 0);
+      lcd.print("one");
+        CurrentState = 700;
+      }else if (PlixNumber > 1){
+        if (y<5){
+          lcd.setCursor(0, 0);
+          lcd.print("more than one");
+          CurrentState = 300;
+        }else if (y>=5){
+          CurrentState = 700;
+          lcd.setCursor(0, 0);
+          lcd.print("giving up");
+        }
+        
+        
+      } delay(1000);
+    break;
+    
+    
+    
+
+   case 300:
+      y++;
+      
+      WingHalfDown();
+      if ( motor1inposition() &&  motor2inposition()) { /////////////this if checks if wing movement is done
+        CurrentState = 400;
+      } 
+   break;
+
+   case 400:
+         WingUp();
+      if ( motor1inposition() &&  motor2inposition()) { /////////////this if checks if wing movement is done
+        CurrentState = 500;
+      }
+    break;
+
+   case 500:
+      //Finish Seperating
+      WingFlat();
+      if ( motor1inposition() &&  motor2inposition()) { /////////////this if checks if wing movement is done
+        CurrentState = 200;
+        delay(200);
+      } 
+   break;
+
+   case 600:
+      
+   break;
+
+   case 700:
+    VertMaxUp();
+    FanHold();
+    CurrentState = 800;
+   break;
+
+   case 800:
+     //Wait for button so can check plix pickup
+      lcd.setCursor(0, 0);
+      lcd.print(reading);
+      reading = digitalRead(Switchpin);
+      
+      if(reading == LOW){
+        FanIdle();
+        lcd.setCursor(0, 0);
+        lcd.print(reading);
+        delay(2000);
+       CurrentState = 900;
+      }
+      if(reading == HIGH){
+        FanIdle();
+        lcd.setCursor(0, 0);
+        lcd.print(reading);
+        delay(2000);
+        CurrentState = 0;
+        
+      }
+   break;
+   
+   case 900:
+     FanIdle();
+     CurrentState = 0;
+   break;
+
+    
+}
+}}
+
+////////////////////////////// function's  //////////////////////////
+int servoMove(int angle1, int angle2, Servo servoNumber, int servoSpeed) {
+
+  if (angle1 >= angle2) {
+    for (pos = angle1 ; pos >= angle2  ; pos -= 1 )
+    { servoNumber .write(pos);
+      delay(  servoSpeed );
+    }
+  }
+
+  if (angle1 <= angle2) {
+    for (pos = angle1 ; pos <= angle2  ; pos += 1 )
+    { servoNumber .write(pos);
+      delay(  servoSpeed );
+    }
+  }
+  return angle2;
+}
+
+void FanCalabrate() {
+  posFan = 48;
+  ServoNumberFan.write(48);
+  lcd.setCursor(0, 0);
+  lcd.print("Fan cal");
+  delay(6000);
+}
+void FanIdle() {
+   posFan = servoMove(posFan , 51,ServoNumberFan , 30 );
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan idle");
+  //  delay(5000);
+
+}
+
+
+void FanHold() {
+   posFan = servoMove(posFan , 55,ServoNumberFan , 30 );
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan Hold");
+  //  delay(5000);
+
+}                                                  /////////////////////
+void FanMid() {
+   posFan = servoMove(posFan , 66,ServoNumberFan , 30 );
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan Mid");
+  //  delay(5000);
+
+}                                                    /////////////////////
+void FanHigh() {
+   posFan = servoMove(posFan , 72,ServoNumberFan , 30 );
+   lcd.setCursor(0, 0);
+   lcd.print("      Fan idle");
+  //  delay(5000);
+
+}                                                   /////////////////////
+
+
+void VertDown(){
+        lcd.setCursor(0, 0);
+      lcd.print("Vert Down");
+  posVert = servoMove(posVert , 30,ServoNumberUpDn , 15 );
+}
+void VertTouch(){
+        lcd.setCursor(0, 0);
+      lcd.print("Vert Touch");
+  posVert = servoMove(posVert , 69,ServoNumberUpDn , 15 );
+}
+void Vert10mm(){
+      lcd.setCursor(0, 0);
+      lcd.print("Vert 10mm");
+  posVert = servoMove(posVert , 77,ServoNumberUpDn , 15 );
+}
+void VertMid(){
+          lcd.setCursor(0, 0);
+      lcd.print("Vert Mid");
+  posVert = servoMove(posVert , 110,ServoNumberUpDn , 30 );
+}
+void VertMaxUp(){
+           lcd.setCursor(0, 0);
+      lcd.print("Vert Max Up");
+  posVert = servoMove(posVert , 140,ServoNumberUpDn , 15 );
+}
+
+void WingDown() {
+      lcd.setCursor(0, 0);
+      lcd.print("Wings Down");/////////////////////
+  motor1setposition(480, 50);
+  motor2setposition(480, 50);
+}
+void WingFlat(){/////////////////////
+        lcd.setCursor(0, 0);
+      lcd.print("Wings Flat");
+  motor1setposition(575, 50);
+  motor2setposition(565, 50); 
+}
+void WingUp(){
+      lcd.setCursor(0, 0);
+      lcd.print("Wings Up");
+  motor1setposition(600, 80);
+  motor2setposition(600, 80); 
+}
+
+void WingHalfDown(){
+      lcd.setCursor(0, 0);
+      lcd.print("Wings HaDown");
+  motor1setposition(525, 80);
+  motor2setposition(525, 80); 
+}
+
+void Scanner(){
+  delay(100);
+  PhotoReading=0;
+  PhotoReading1=0;
+  PhotoReading2=0;
+  Average=0;
+  digitalWrite(LedPin, HIGH);
+  delay(100);
+  for(int i = 0 ; i <= 500 ; i++){
+    PhotoReading = PhotoReading + analogRead(PhotoPin);
+    PhotoReading1 = PhotoReading1 + analogRead(PhotoPin1);
+    PhotoReading2 = PhotoReading2 + analogRead(PhotoPin2);
+    //AmbientReading = AmbientReading + analogRead(AmbientPin);
+    
+  }
+  PhotoReading = 1000- (PhotoReading/500);
+  PhotoReading1 = 1000- (PhotoReading1/500);
+  PhotoReading2 = 1000- (PhotoReading2/500);
+  //AmbientReading = AmbientReading/500;
+  digitalWrite(LedPin, LOW);
+  Average = ((PhotoReading + PhotoReading1 + PhotoReading2)/3);
+  lcd.setCursor(0, 1);
+  lcd.print(Average);
+  if (Average < 100){
+    PlixNumber = 0;
+  }else if (Average >=100 && Average <200){
+    PlixNumber = 1;
+  }else if (Average >=200){
+    PlixNumber = 2;
+  }
+}
