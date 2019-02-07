@@ -1,2 +1,2 @@
-# Picker
+# Plix Picker
 Plix Picker
