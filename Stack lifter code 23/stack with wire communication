@@ -1,0 +1,337 @@
+/*
+
+*/
+#include <LiquidCrystal.h>
+#include <Wire.h>
+
+int lcd_key     = 0;
+int adc_key_in  = 0;
+#define btnRIGHT  0
+#define btnUP     1
+#define btnDOWN   2
+#define btnLEFT   3
+#define btnSELECT 4
+#define btnNONE   5
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+int read_LCD_buttons()
+{
+  adc_key_in = analogRead(0);      // read the value from the sensor
+  // my buttons when read are centered at these valies: 0, 144, 329, 504, 741
+  // we add approx 50 to those values and check to see if we are close
+  if (adc_key_in > 1000) return btnNONE; // We make this the 1st option for speed reasons since it will be the most likely result
+  // For V1.1 us this threshold
+  if (adc_key_in < 50)   return btnRIGHT;
+  if (adc_key_in < 250)  return btnUP;
+  if (adc_key_in < 450)  return btnDOWN;
+  if (adc_key_in < 650)  return btnLEFT;
+  if (adc_key_in < 850)  return btnSELECT;
+
+
+  return btnNONE;  // when all others fail, return this...
+}
+
+
+///////buttons///////
+int metal_up = 23; 
+int metal_down = 25;
+int metal_home = 27;
+int metal_jet = 29;
+int wood_up = 22;
+int wood_down = 24;
+int wood_home = 26;
+int wood_jet = 28;
+///////sensors///////
+int AirSensorPin1 = 42; //farsensor
+int AirSensorPin2 = 40;
+int WoodProxPin = 41; //Refers to the one for the wooden sensor
+int MetalProxPin = 53; //Refers to the one for the metal sensor
+int metal_bottom = 37;
+///////outputs///////
+#define StepPulse  43 //cw pulse
+#define DirectionSelect  45 //ccw
+#define PowerDown  47
+#define PulseOriginMonitor  49
+#define Alarm  51
+const int motorON = 31;
+const int motorAP = 33;
+const int MetalJetPin = 35;
+const int WoodJetPin = 39;
+///////modes///////
+int AutoMode = 0;
+int motorPosition = 0;
+
+
+void setup() {
+  //Button declarations
+  pinMode(metal_up, INPUT_PULLUP);
+  pinMode(metal_down, INPUT_PULLUP);
+  pinMode(metal_home, INPUT_PULLUP);
+  pinMode(metal_jet, INPUT_PULLUP);
+  pinMode(wood_up, INPUT_PULLUP);
+  pinMode(wood_down, INPUT_PULLUP);
+  pinMode(wood_home, INPUT_PULLUP);
+  pinMode(wood_jet, INPUT_PULLUP);
+  //Sensor declarations
+  pinMode(WoodProxPin, INPUT_PULLUP); //WOOD SENSOR
+  pinMode(MetalProxPin, INPUT_PULLUP); //METAL SENSOR
+  pinMode(metal_bottom, INPUT_PULLUP); //METAL SENSOR
+  pinMode(AirSensorPin1, INPUT_PULLUP);
+  pinMode(AirSensorPin2, INPUT_PULLUP);
+  //metal output declarations
+  pinMode(motorON, OUTPUT);
+  pinMode(motorAP, OUTPUT);
+  pinMode(MetalJetPin, OUTPUT);
+  //Wooden output declarations
+  pinMode(StepPulse, OUTPUT);
+  pinMode(DirectionSelect, OUTPUT);
+  pinMode(PowerDown, OUTPUT);
+  pinMode(PulseOriginMonitor, INPUT);
+  pinMode(Alarm, INPUT);
+  pinMode(WoodJetPin, OUTPUT);
+  
+  //Turn on the motor
+  //The driver is setup with inverted logic ie. arduino pin LOW counts as ON to the driver
+  digitalWrite(PowerDown, HIGH);
+  
+  Wire.begin(8);                // join i2c bus with address #8
+  Wire.onReceive(receiveEvent); // register event
+  Serial.begin(9600); 
+  lcd.begin(16, 2);              // start the library
+  lcd.setCursor(0, 0);// start serial for output
+}
+
+void loop() {
+    if(digitalRead(metal_up) == LOW){
+     MetalUp();
+    } else if(digitalRead(metal_down) == LOW){
+     MetalDown();
+    } else if(digitalRead(metal_home) == LOW){
+     MetalHome();
+    } else if(digitalRead(metal_jet) == LOW){
+     MetalJet();
+    } else if(digitalRead(wood_up) == LOW){
+     WoodUp();
+    } else if(digitalRead(wood_down) == LOW){
+     WoodDown();
+    } else if(digitalRead(wood_home) == LOW){
+     WoodHome();
+    } else if(digitalRead(wood_jet) == LOW){
+     WoodJet();
+    }else {
+      MetalNothing();
+    }
+}
+
+
+
+// function that executes whenever data is received from master
+// this function is registered as an event, see setup()
+void receiveEvent(int howMany) {
+  
+  int x = Wire.read();    // receive byte as an integer
+  lcd.setCursor(8, 0);
+  lcd.print(x);         // print the integer
+  switch(x){
+    
+    case 0:
+      AirRequest();
+    break;
+    
+    case 1:
+      WoodHomeRequest();
+    break;
+    
+    case 2:
+      MetalHomeRequest();
+    break;
+    
+    case 3:
+      BlastRequest();
+    break;
+  }
+}
+
+void AirRequest(){
+  int a = 0;
+  while (a < 100){
+    switch (a)
+    {
+      case 0:
+        WoodDown();
+        if ((digitalRead(AirSensorPin1) == HIGH) && (digitalRead(AirSensorPin2) == HIGH)){
+          a = 10;
+        }
+      break;
+      
+      case 10:
+        digitalWrite(MetalJetPin, HIGH);
+        digitalWrite(WoodJetPin, HIGH);
+        a = 20;
+      break;
+      
+      case 20:
+        for (int i=0; i <= 5; i++){
+          WoodUp();
+        }
+        if (digitalRead(WoodProxPin) == LOW){
+          a = 30;
+        }
+      break;
+      
+      case 30:
+        digitalWrite(MetalJetPin, LOW);
+        digitalWrite(WoodJetPin, LOW);
+        WoodHome();
+        a = 1000;
+      break;
+      
+    }
+  }
+  return;
+}
+void WoodHomeRequest(){
+  WoodHome();
+}
+void MetalHomeRequest(){
+  MetalHome();
+}
+void BlastRequest(){
+  int a = 0;
+  while (a < 100){
+    switch (a)
+    {
+      case 0:
+        WoodDown();
+        if ((digitalRead(AirSensorPin1) == HIGH) && (digitalRead(AirSensorPin2) == HIGH)){
+          a = 10;
+        }
+      break;
+      
+      case 10:
+        digitalWrite(MetalJetPin, HIGH);
+        digitalWrite(WoodJetPin, HIGH);
+        a = 20;
+      break;
+      
+      case 20:
+        delay(1000);
+        digitalWrite(MetalJetPin, LOW);
+        digitalWrite(WoodJetPin, LOW);
+        a = 30;
+      break;
+      
+      case 30:
+       // WoodHome();
+        a = 1000;
+      break;
+    }
+  }
+  return;
+}
+void MetalUp(){
+  SwitchForward();
+  digitalWrite(motorON, HIGH);
+  delay(100);
+}
+void MetalDown(){
+  SwitchBackwards();
+  digitalWrite(motorON, HIGH);
+  delay(100);
+}
+void MetalHome(){
+  int Start = 0;
+  digitalRead(MetalProxPin);
+  
+  if (digitalRead(MetalProxPin) == LOW && Start == 0) {
+    while(digitalRead(MetalProxPin) == LOW){
+      MetalDown();
+      digitalRead(MetalProxPin);
+    }
+    MetalNothing();
+    Start = 1;
+    while(digitalRead(MetalProxPin) == HIGH && Start == 1){
+      MetalUp();
+      digitalRead(MetalProxPin);
+    }
+    Start = 2;
+    MetalNothing();
+    
+  }else if (digitalRead(MetalProxPin) == HIGH && Start == 0){
+    
+    while(digitalRead(MetalProxPin) == HIGH){
+      MetalUp();
+      digitalRead(MetalProxPin);
+    }
+    MetalNothing();
+    Start = 1;
+  }
+  MetalNothing();
+}
+void SwitchBackwards() {
+  digitalWrite(motorON, LOW);
+  delay(1);
+  digitalWrite(motorAP, HIGH);
+  delay(1);
+}
+void SwitchForward() {
+  digitalWrite(motorON, LOW);
+  delay(1);
+  digitalWrite(motorAP, LOW);
+  delay(1);
+}
+void MetalNothing() {
+  digitalWrite(motorON, LOW);
+}
+void MetalJet() {
+  digitalWrite(MetalJetPin, HIGH);
+  delay(500); //do this fo1 second
+  digitalWrite(MetalJetPin, LOW);
+}
+void WoodUp(){
+  for (int i=0; i <= 255; i++){
+  digitalWrite(DirectionSelect, HIGH);
+  motorPosition++;
+  delayMicroseconds(500);
+  digitalWrite(DirectionSelect, LOW);
+  }
+}
+void WoodDown(){
+  for (int i=0; i <= 255; i++){
+  digitalWrite(StepPulse, HIGH);
+  motorPosition--;
+  delayMicroseconds(500);
+  digitalWrite(StepPulse, LOW);
+  
+  }
+}
+void WoodHome(){
+  
+  int Start = 0;
+  digitalRead(WoodProxPin);
+  
+  if (digitalRead(WoodProxPin) == LOW && Start == 0) {
+    while(digitalRead(WoodProxPin) == LOW){
+      WoodDown();
+      digitalRead(WoodProxPin);
+    }
+    Start = 1;
+    while(digitalRead(WoodProxPin) == HIGH && Start == 1){
+      WoodUp();
+      digitalRead(WoodProxPin);
+    }
+    Start = 2;
+    
+  }else if (digitalRead(WoodProxPin) == HIGH && Start == 0){
+    
+    while(digitalRead(WoodProxPin) == HIGH){
+      WoodUp();
+      digitalRead(WoodProxPin);
+    }
+    Start = 1;
+  }
+}
+void WoodJet() {
+  digitalWrite(WoodJetPin, HIGH);
+  delay(500); //do this fo1 second
+  digitalWrite(WoodJetPin, LOW);
+}
